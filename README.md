@@ -110,25 +110,37 @@ http://localhost:5477/docs
 
 ---
 
-## Docker
+## Docker Setup
 
-### Build the image
-
+### Option 1: Build locally
 ```bash
+# Build
 docker build -t blk-hacking-ind-ganesh-pandey .
-```
 
-### Run the container
-
-```bash
+# Run
 docker run -d -p 5477:5477 blk-hacking-ind-ganesh-pandey
 ```
 
-### Using Docker Compose
-
+### Option 2: Pull from Docker Hub
 ```bash
-docker compose -f compose.yaml up -d
+# Pull
+docker pull pyuniverse/blackrock-retirement-api-image:latest
+
+# Run
+docker run -d -p 5477:5477 pyuniverse/blackrock-retirement-api-image:latest
 ```
+
+### Option 3: Docker Compose
+```bash
+docker compose up -d --build
+```
+
+### Verify running
+```bash
+docker ps
+curl http://localhost:5477/
+```
+
 
 ---
 
