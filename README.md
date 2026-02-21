@@ -33,12 +33,7 @@ BLACKROCK-HACKATHON-2026/
 │   │   └── tax_calculator.py
 │   ├── utils/
 │   │   ├── __init__.py
-│   │   ├── date_utils.py
-│   │   ├── math_utils.py
 │   │   └── performance_tracker.py
-│   └── core/
-│       ├── __init__.py
-│       └── config.py
 ├── test/
 │   ├── test_transactions.py
 │   ├── test_returns.py
@@ -104,7 +99,7 @@ pip install -r requirements.txt
 ### 4. Run the server
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 5477 --reload
+uvicorn main:app --host 0.0.0.0 --port 5477 --reload
 ```
 
 ### 5. Access API docs
@@ -120,13 +115,13 @@ http://localhost:5477/docs
 ### Build the image
 
 ```bash
-docker build -t blk-hacking-ind-{name-lastname} .
+docker build -t blk-hacking-ind-ganesh-pandey .
 ```
 
 ### Run the container
 
 ```bash
-docker run -d -p 5477:5477 blk-hacking-ind-{name-lastname}
+docker run -d -p 5477:5477 blk-hacking-ind-ganesh-pandey
 ```
 
 ### Using Docker Compose
