@@ -5,7 +5,7 @@ from app.services.transaction_builder import build_transactions
 from app.services.transaction_validator import validate_transactions
 from app.models.schemas import TransactionValidatorRequest
 
-router = APIRouter(prefix="/blackrock/challenge/v1")
+router = APIRouter()
 
 @router.post("/transactions:parse")
 def parse_transactions(request: TransactionParseRequest):

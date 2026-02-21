@@ -28,9 +28,13 @@ def calculate_remanent_for_transaction(
     q_periods: List[QPeriod],
     p_periods: List[PPeriod]
 ) -> float:
-    remanent = apply_q_rule(txn, q_periods)
-    remanent = apply_p_rule(remanent, txn, p_periods)
+    
+    q_result = apply_q_rule(txn.date, q_periods)
+    remanent = q_result if q_result is not None else txn.remanent
+
+    remanent += apply_p_rule(txn.date, p_periods)
     return remanent
+
 
 
 def calculate_returns(request: ReturnsRequest, rate: float, is_nps: bool) -> ReturnsResponse:
@@ -41,64 +45,46 @@ def calculate_returns(request: ReturnsRequest, rate: float, is_nps: bool) -> Ret
     seen = set()
 
     txns = build_transactions(request.transactions)["transactions"]
-    # --- Filter valid transactions ---
+
     for txn in txns:
-        # skip negatives
         if txn.amount < 0:
             continue
 
         key = (txn.date, txn.amount)
-
-        # skip duplicates
         if key in seen:
             continue
         seen.add(key)
 
-        # ceiling = get_ceiling(expense.amount)
-        # remanent = ceiling - expense.amount
-
-        # txn = Transaction(
-        #     date=expense.date,
-        #     amount=expense.amount,
-        #     ceiling=ceiling,
-        #     remanent=remanent
-        # )
-
-        # apply q and p rules
         txn_data = txn.dict()
-        txn_data["remanent"] = calculate_remanent_for_transaction(txn, request.q, request.p)
+        txn_data["remanent"] = calculate_remanent_for_transaction(
+            txn, request.q, request.p
+        )
         valid_transactions.append(Transaction(**txn_data))
 
-    # --- Totals ---
     total_amount = sum(t.amount for t in valid_transactions)
     total_ceiling = sum(t.ceiling for t in valid_transactions)
 
-    # --- Savings by k periods ---
     savings_by_dates = []
 
     for k in request.k:
-        # sum remanents within this k period
         amount = sum(
             t.remanent for t in valid_transactions
             if k.start <= t.date <= k.end
         )
 
-        # compound interest
         A = compound_interest(amount, rate, years)
-        profit = round(A - amount, 2)
 
-        # inflation adjust the profit
-        profit_real = round(inflation_adjust(A, request.inflation, years) - 
-                           inflation_adjust(amount, request.inflation, years), 2)
+        real_value = inflation_adjust(A, request.inflation, years)
 
-        # tax benefit (NPS only)
+        profit = round(real_value - amount, 2)
+
         tax_benefit = calculate_tax_benefit(amount, annual_wage) if is_nps else 0.0
 
         savings_by_dates.append(SavingByDate(
             start=k.start,
             end=k.end,
             amount=round(amount, 2),
-            profit=profit_real,
+            profit=profit,
             taxBenefit=tax_benefit
         ))
 

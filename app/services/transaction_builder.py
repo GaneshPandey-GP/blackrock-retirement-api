@@ -3,6 +3,9 @@ from typing import List
 from app.models.schemas import Expense, Transaction
 
 
+def get_ceiling(amount: float) -> float:
+    return math.floor(amount / 100) * 100 + 100
+
 def build_transactions(expenses: List[Expense]):
     transactions = []
 

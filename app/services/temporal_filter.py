@@ -1,135 +1,114 @@
-from typing import List
+from typing import List,Optional
+from concurrent.futures import ThreadPoolExecutor
+import os
+import math
 from app.models.schemas import (
     Transaction, InvalidTransaction, ValidTransactionWithKPeriod,
     QPeriod, PPeriod, KPeriod,
     TransactionFilterRequest, TransactionFilterResponse
 )
-from app.services.transaction_builder import build_transactions
-
-def apply_q_rule(txn: Transaction, q_periods: List[QPeriod]) -> float:
-    """
-    If transaction date falls in a q period, replace remanent with fixed amount.
-    If multiple q periods match, use the one with latest start date.
-    If same start date, use first in list.
-    """
-    matching = [
-        q for q in q_periods
-        if q.start <= txn.date <= q.end
-    ]
-
-    if not matching:
-        return txn.remanent
-
-    # latest start wins, ties broken by first in list
-    best = max(matching, key=lambda q: q.start)
-    return best.fixed
 
 
-def apply_p_rule(remanent: float, txn: Transaction, p_periods: List[PPeriod]) -> float:
-    """
-    If transaction date falls in any p period, add ALL their extras to remanent.
-    """
-    matching = [
-        p for p in p_periods
-        if p.start <= txn.date <= p.end
-    ]
-
-    for p in matching:
-        remanent += p.extra
-
-    return remanent
+def preprocess_q_periods(q_periods: List[QPeriod]) -> List[QPeriod]:
+    return sorted(q_periods, key=lambda q: q.start, reverse=True)
 
 
-def is_in_k_period(txn: Transaction, k_periods: List[KPeriod]) -> bool:
-    """
-    Check if transaction falls in ANY k period.
-    """
-    return any(k.start <= txn.date <= k.end for k in k_periods)
+
+def apply_q_rule(txn_date, q_sorted: List[QPeriod]) -> Optional[float]:
+    for q in q_sorted:
+        if q.start <= txn_date <= q.end:
+            return q.fixed
+    return None
+
+def apply_p_rule(txn_date, p_periods: List[PPeriod]) -> float:
+    return sum(p.extra for p in p_periods if p.start <= txn_date <= p.end)
 
 
-# def filter_transactions(request: TransactionFilterRequest) -> TransactionFilterResponse:
-#     valid = []
-#     invalid = []
-#     seen = set()
-
-#     for txn in request.transactions:
-#         key = (txn.date, txn.amount)
-
-#         # --- Duplicate check ---
-#         if key in seen:
-#             invalid.append(InvalidTransaction(
-#                 **txn.dict(),
-#                 message="Duplicate transaction"
-#             ))
-#             continue
-#         seen.add(key)
-
-#         # --- Negative amount check ---
-#         if txn.amount < 0:
-#             invalid.append(InvalidTransaction(
-#                 **txn.dict(),
-#                 message="Negative amounts are not allowed"
-#             ))
-#             continue
-
-#         # --- Step 1: Apply q rule (replace remanent) ---
-#         remanent = apply_q_rule(txn, request.q)
-
-#         # --- Step 2: Apply p rule (add to remanent) ---
-#         remanent = apply_p_rule(remanent, txn, request.p)
-
-#         # --- Step 3: Check k period ---
-#         in_k = is_in_k_period(txn, request.k)
-#         txn_data = txn.dict()
-#         txn_data["remanent"] = remanent  # override with updated remanent
-#         txn_data["inKPeriod"] = in_k
-        
-#         valid.append(ValidTransactionWithKPeriod(
-#             **txn_data
-#         ))
-
-#     return TransactionFilterResponse(
-#         valid=valid,
-#         invalid=invalid
-#     )
+def is_in_k_period(txn_date, k_periods: List[KPeriod]) -> bool:
+    if not k_periods:
+        return True
+    return any(k.start <= txn_date <= k.end for k in k_periods)
 
 
-def filter_transactions(request: TransactionFilterRequest) -> TransactionFilterResponse:
-    valid = []
-    invalid = []
-    seen = set()
-    txns = build_transactions(request.transactions)["transactions"]
-    for txn in txns:
-        key = (txn.date, txn.amount)
+
+def process_chunk(args):
+    expenses_chunk, q_sorted, p_periods, k_periods, seen = args
+    chunk_valid = []
+    chunk_invalid = []
+
+    for expense in expenses_chunk:
+        key = (expense.date, expense.amount)
+
+      
         if key in seen:
-            invalid.append(InvalidTransaction(
-                **txn.dict(),
+            chunk_invalid.append(InvalidTransaction(
+                date=expense.date,
+                amount=expense.amount,
                 message="Duplicate transaction"
             ))
             continue
         seen.add(key)
 
-        # --- Negative check ---
-        if txn.amount < 0:
-            invalid.append(InvalidTransaction(
-                **txn.dict(),
+    
+        if expense.amount < 0:
+            chunk_invalid.append(InvalidTransaction(
+                date=expense.date,
+                amount=expense.amount,
                 message="Negative amounts are not allowed"
             ))
             continue
 
-        # --- Apply q rule ---
-        remanent = apply_q_rule(txn, request.q)
+        ceiling = math.floor(expense.amount / 100) * 100 + 100
+        remanent = ceiling - expense.amount
 
-        # --- Apply p rule ---
-        remanent = apply_p_rule(remanent, txn, request.p)
+        txn = Transaction(
+            date=expense.date,
+            amount=expense.amount,
+            ceiling=ceiling,
+            remanent=remanent
+        )
 
-        # --- Check k period ---
-        in_k = is_in_k_period(txn, request.k)
 
-        txn_data = txn.dict()
+        q_result = apply_q_rule(expense.date, q_sorted)
+        remanent = q_result if q_result is not None else remanent
+
+
+        remanent += apply_p_rule(expense.date, p_periods)
+
+   
+        in_k = is_in_k_period(expense.date, k_periods)
+
+        txn_data = txn.model_dump()
         txn_data["remanent"] = remanent
         txn_data["inKPeriod"] = in_k
+        chunk_valid.append(ValidTransactionWithKPeriod(**txn_data))
 
-        valid.append(ValidTransactionWithKPeriod(**txn_data))
+    return chunk_valid, chunk_invalid
+
+
+
+def filter_transactions(request: TransactionFilterRequest) -> TransactionFilterResponse:
+    q_sorted = preprocess_q_periods(request.q)
+    seen = set()
+
+    CHUNK_SIZE = 10000
+    chunks = [
+        request.transactions[i:i + CHUNK_SIZE]
+        for i in range(0, len(request.transactions), CHUNK_SIZE)
+    ]
+    
+    args_list = [
+        (chunk, q_sorted, request.p, request.k, seen)
+        for chunk in chunks
+    ]
+    valid = []
+    invalid = []
+
+    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        results = list(executor.map(process_chunk, args_list))
+        
+    for chunk_valid, chunk_invalid in results:
+        valid.extend(chunk_valid)
+        invalid.extend(chunk_invalid)
 
     return TransactionFilterResponse(valid=valid, invalid=invalid)
